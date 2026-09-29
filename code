@@ -1,0 +1,856 @@
+
+// py -3.13 RoboPilot_V50.py
+
+import tkinter as tk
+from tkinter import filedialog, messagebox
+import math
+import heapq
+import json
+import random
+import time
+
+
+# ============================================================
+# ROBOPILOT V50
+# AI ROBOTICS SIMULATION LAB
+# Single-file Python Robotics Simulator
+# ============================================================
+
+VERSION = "RoboPilot V50"
+GRID_W = 24
+GRID_H = 18
+CELL = 32
+
+EMPTY = 0
+OBSTACLE = 1
+START = 2
+GOAL = 3
+
+
+class RoboPilot:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("RoboPilot V50 - AI Robotics Simulation Lab")
+        self.root.geometry("1180x760")
+        self.root.minsize(1000, 680)
+
+        self.running = False
+        self.auto_mode = True
+        self.manual_mode = False
+        self.show_sensors = True
+        self.show_path = True
+
+        self.speed = 120
+        self.battery = 100.0
+        self.distance = 0.0
+        self.collisions = 0
+        self.start_time = time.time()
+
+        self.robot_x = 2
+        self.robot_y = 2
+        self.robot_dir = "EAST"
+
+        self.start = (2, 2)
+        self.goal = (20, 15)
+
+        self.path = []
+        self.path_index = 0
+
+        self.sensor_front = 0
+        self.sensor_left = 0
+        self.sensor_right = 0
+
+        self.grid = [[EMPTY for _ in range(GRID_W)] for _ in range(GRID_H)]
+
+        self.build_default_map()
+        self.build_gui()
+        self.update_display()
+
+    # ========================================================
+    # MAP
+    # ========================================================
+
+    def build_default_map(self):
+        self.grid = [[EMPTY for _ in range(GRID_W)] for _ in range(GRID_H)]
+
+        # Border
+        for y in range(GRID_H):
+            self.grid[y][0] = OBSTACLE
+            self.grid[y][GRID_W - 1] = OBSTACLE
+
+        for x in range(GRID_W):
+            self.grid[0][x] = OBSTACLE
+            self.grid[GRID_H - 1][x] = OBSTACLE
+
+        # Random deterministic obstacles
+        blocks = [
+            (6, 2), (6, 3), (6, 4), (6, 5), (6, 6),
+            (10, 5), (11, 5), (12, 5), (13, 5),
+            (15, 8), (15, 9), (15, 10), (15, 11),
+            (5, 11), (6, 11), (7, 11), (8, 11),
+            (18, 3), (18, 4), (18, 5),
+            (20, 8), (21, 8), (20, 9), (21, 9),
+            (11, 13), (12, 13), (13, 13), (14, 13)
+        ]
+
+        for x, y in blocks:
+            if (x, y) != self.start and (x, y) != self.goal:
+                self.grid[y][x] = OBSTACLE
+
+        self.grid[self.start[1]][self.start[0]] = START
+        self.grid[self.goal[1]][self.goal[0]] = GOAL
+
+    # ========================================================
+    # GUI
+    # ========================================================
+
+    def build_gui(self):
+        header = tk.Frame(self.root, bg="#101820", height=70)
+        header.pack(fill="x")
+
+        title = tk.Label(
+            header,
+            text="🤖 ROBOPILOT V50",
+            font=("Segoe UI", 22, "bold"),
+            fg="white",
+            bg="#101820"
+        )
+        title.pack(side="left", padx=20, pady=12)
+
+        subtitle = tk.Label(
+            header,
+            text="AI ROBOTICS SIMULATION LAB",
+            font=("Segoe UI", 11),
+            fg="#9fb3c8",
+            bg="#101820"
+        )
+        subtitle.pack(side="left")
+
+        main = tk.Frame(self.root, bg="#18232e")
+        main.pack(fill="both", expand=True)
+
+        # Canvas
+        left = tk.Frame(main, bg="#18232e")
+        left.pack(side="left", fill="both", expand=True, padx=12, pady=12)
+
+        self.canvas = tk.Canvas(
+            left,
+            width=GRID_W * CELL,
+            height=GRID_H * CELL,
+            bg="#071018",
+            highlightthickness=1,
+            highlightbackground="#4b6375"
+        )
+        self.canvas.pack(expand=True)
+
+        # Right dashboard
+        right = tk.Frame(main, width=300, bg="#101820")
+        right.pack(side="right", fill="y", padx=(0, 12), pady=12)
+        right.pack_propagate(False)
+
+        tk.Label(
+            right,
+            text="ROBOT DASHBOARD",
+            font=("Segoe UI", 15, "bold"),
+            fg="white",
+            bg="#101820"
+        ).pack(pady=(15, 10))
+
+        self.status_label = tk.Label(
+            right,
+            text="READY",
+            font=("Segoe UI", 13, "bold"),
+            fg="#65e572",
+            bg="#101820"
+        )
+        self.status_label.pack(pady=5)
+
+        self.info_label = tk.Label(
+            right,
+            text="",
+            justify="left",
+            anchor="w",
+            font=("Consolas", 10),
+            fg="#d9e5ef",
+            bg="#101820"
+        )
+        self.info_label.pack(fill="x", padx=18, pady=10)
+
+        # Controls
+        control_frame = tk.LabelFrame(
+            right,
+            text="Controls",
+            fg="white",
+            bg="#101820",
+            font=("Segoe UI", 10, "bold")
+        )
+        control_frame.pack(fill="x", padx=12, pady=8)
+
+        self.make_button(control_frame, "▶ Start Autonomous", self.start_robot)
+        self.make_button(control_frame, "■ Stop", self.stop_robot)
+        self.make_button(control_frame, "🧭 Calculate A* Path", self.calculate_path)
+        self.make_button(control_frame, "↻ Reset Robot", self.reset_robot)
+        self.make_button(control_frame, "🎲 New Map", self.random_map)
+        self.make_button(control_frame, "💾 Save Map", self.save_map)
+        self.make_button(control_frame, "📂 Load Map", self.load_map)
+
+        self.sensor_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(
+            control_frame,
+            text="Show Sensors",
+            variable=self.sensor_var,
+            command=self.update_display,
+            bg="#101820",
+            fg="white",
+            selectcolor="#18232e",
+            activebackground="#101820",
+            activeforeground="white"
+        ).pack(anchor="w", padx=10, pady=3)
+
+        self.path_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(
+            control_frame,
+            text="Show Path",
+            variable=self.path_var,
+            command=self.update_display,
+            bg="#101820",
+            fg="white",
+            selectcolor="#18232e",
+            activebackground="#101820",
+            activeforeground="white"
+        ).pack(anchor="w", padx=10, pady=3)
+
+        # Speed
+        tk.Label(
+            right,
+            text="Robot Speed",
+            fg="white",
+            bg="#101820"
+        ).pack(pady=(10, 2))
+
+        self.speed_scale = tk.Scale(
+            right,
+            from_=40,
+            to=250,
+            orient="horizontal",
+            bg="#101820",
+            fg="white",
+            highlightthickness=0,
+            command=self.change_speed
+        )
+        self.speed_scale.set(120)
+        self.speed_scale.pack(fill="x", padx=20)
+
+        # Manual control
+        tk.Label(
+            right,
+            text="Manual Controls",
+            font=("Segoe UI", 11, "bold"),
+            fg="white",
+            bg="#101820"
+        ).pack(pady=(15, 5))
+
+        manual = tk.Frame(right, bg="#101820")
+        manual.pack()
+
+        tk.Button(manual, text="▲", width=5, command=lambda: self.manual_move(0, -1)).grid(row=0, column=1, padx=2, pady=2)
+        tk.Button(manual, text="◀", width=5, command=lambda: self.manual_move(-1, 0)).grid(row=1, column=0, padx=2, pady=2)
+        tk.Button(manual, text="■", width=5, command=self.stop_robot).grid(row=1, column=1, padx=2, pady=2)
+        tk.Button(manual, text="▶", width=5, command=lambda: self.manual_move(1, 0)).grid(row=1, column=2, padx=2, pady=2)
+        tk.Button(manual, text="▼", width=5, command=lambda: self.manual_move(0, 1)).grid(row=2, column=1, padx=2, pady=2)
+
+        # Log
+        tk.Label(
+            right,
+            text="Event Log",
+            font=("Segoe UI", 11, "bold"),
+            fg="white",
+            bg="#101820"
+        ).pack(pady=(15, 4))
+
+        self.log_box = tk.Text(
+            right,
+            height=8,
+            bg="#071018",
+            fg="#b9d8ea",
+            font=("Consolas", 8),
+            relief="flat"
+        )
+        self.log_box.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+
+        self.log("RoboPilot V50 initialized")
+        self.log("Virtual sensors online")
+        self.log("A* navigation ready")
+
+        self.root.bind("<Up>", lambda e: self.manual_move(0, -1))
+        self.root.bind("<Down>", lambda e: self.manual_move(0, 1))
+        self.root.bind("<Left>", lambda e: self.manual_move(-1, 0))
+        self.root.bind("<Right>", lambda e: self.manual_move(1, 0))
+
+    def make_button(self, parent, text, command):
+        tk.Button(
+            parent,
+            text=text,
+            command=command,
+            font=("Segoe UI", 9, "bold"),
+            bg="#223442",
+            fg="white",
+            activebackground="#344e60",
+            activeforeground="white",
+            relief="flat",
+            pady=6
+        ).pack(fill="x", padx=8, pady=3)
+
+    # ========================================================
+    # LOG
+    # ========================================================
+
+    def log(self, text):
+        timestamp = time.strftime("%H:%M:%S")
+        self.log_box.insert("end", f"[{timestamp}] {text}\n")
+        self.log_box.see("end")
+
+    # ========================================================
+    # DRAW MAP
+    # ========================================================
+
+    def update_display(self):
+        self.canvas.delete("all")
+
+        # Grid
+        for y in range(GRID_H):
+            for x in range(GRID_W):
+                x1 = x * CELL
+                y1 = y * CELL
+                x2 = x1 + CELL
+                y2 = y1 + CELL
+
+                value = self.grid[y][x]
+
+                if value == OBSTACLE:
+                    fill = "#35434d"
+                elif value == START:
+                    fill = "#173d2a"
+                elif value == GOAL:
+                    fill = "#47351c"
+                else:
+                    fill = "#0b151d"
+
+                self.canvas.create_rectangle(
+                    x1, y1, x2, y2,
+                    fill=fill,
+                    outline="#1d2b34"
+                )
+
+        # Path
+        if self.path_var.get() and self.path:
+            for px, py in self.path:
+                cx = px * CELL + CELL // 2
+                cy = py * CELL + CELL // 2
+                self.canvas.create_oval(
+                    cx - 4, cy - 4,
+                    cx + 4, cy + 4,
+                    fill="#6d8796",
+                    outline=""
+                )
+
+        # Start
+        sx = self.start[0] * CELL + CELL // 2
+        sy = self.start[1] * CELL + CELL // 2
+
+        self.canvas.create_text(
+            sx, sy,
+            text="S",
+            fill="#70e58a",
+            font=("Segoe UI", 12, "bold")
+        )
+
+        # Goal
+        gx = self.goal[0] * CELL + CELL // 2
+        gy = self.goal[1] * CELL + CELL // 2
+
+        self.canvas.create_text(
+            gx, gy,
+            text="G",
+            fill="#ffcc66",
+            font=("Segoe UI", 12, "bold")
+        )
+
+        # Sensors
+        self.draw_sensors()
+
+        # Robot
+        rx = self.robot_x * CELL + CELL // 2
+        ry = self.robot_y * CELL + CELL // 2
+
+        self.canvas.create_oval(
+            rx - 11, ry - 11,
+            rx + 11, ry + 11,
+            fill="#55aee8",
+            outline="white",
+            width=2
+        )
+
+        # Direction arrow
+        directions = {
+            "NORTH": (0, -13),
+            "SOUTH": (0, 13),
+            "EAST": (13, 0),
+            "WEST": (-13, 0)
+        }
+
+        dx, dy = directions[self.robot_dir]
+
+        self.canvas.create_line(
+            rx, ry,
+            rx + dx,
+            ry + dy,
+            fill="white",
+            width=3,
+            arrow=tk.LAST
+        )
+
+        self.canvas.create_text(
+            rx,
+            ry + 22,
+            text="ROBOT",
+            fill="white",
+            font=("Segoe UI", 7, "bold")
+        )
+
+        self.update_dashboard()
+
+    # ========================================================
+    # SENSOR SYSTEM
+    # ========================================================
+
+    def ray_distance(self, dx, dy, max_distance=10):
+        x = self.robot_x
+        y = self.robot_y
+
+        for distance in range(1, max_distance + 1):
+            x += dx
+            y += dy
+
+            if not self.is_free(x, y):
+                return distance * 10
+
+        return max_distance * 10
+
+    def update_sensors(self):
+        directions = {
+            "NORTH": (0, -1),
+            "SOUTH": (0, 1),
+            "EAST": (1, 0),
+            "WEST": (-1, 0)
+        }
+
+        fx, fy = directions[self.robot_dir]
+
+        if self.robot_dir in ("EAST", "WEST"):
+            left = (0, -1) if self.robot_dir == "EAST" else (0, 1)
+            right = (0, 1) if self.robot_dir == "EAST" else (0, -1)
+        else:
+            left = (-1, 0) if self.robot_dir == "NORTH" else (1, 0)
+            right = (1, 0) if self.robot_dir == "NORTH" else (-1, 0)
+
+        self.sensor_front = self.ray_distance(fx, fy)
+        self.sensor_left = self.ray_distance(left[0], left[1])
+        self.sensor_right = self.ray_distance(right[0], right[1])
+
+    def draw_sensors(self):
+        if not self.sensor_var.get():
+            return
+
+        self.update_sensors()
+
+        rx = self.robot_x * CELL + CELL // 2
+        ry = self.robot_y * CELL + CELL // 2
+
+        directions = {
+            "NORTH": (0, -1),
+            "SOUTH": (0, 1),
+            "EAST": (1, 0),
+            "WEST": (-1, 0)
+        }
+
+        dx, dy = directions[self.robot_dir]
+
+        # Front sensor
+        self.canvas.create_line(
+            rx,
+            ry,
+            rx + dx * self.sensor_front * 2,
+            ry + dy * self.sensor_front * 2,
+            fill="#ffcf5a",
+            width=2
+        )
+
+    # ========================================================
+    # A* PATHFINDING
+    # ========================================================
+
+    def heuristic(self, a, b):
+        return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+    def get_neighbors(self, node):
+        x, y = node
+
+        neighbors = [
+            (x + 1, y),
+            (x - 1, y),
+            (x, y + 1),
+            (x, y - 1)
+        ]
+
+        return [
+            n for n in neighbors
+            if 0 <= n[0] < GRID_W
+            and 0 <= n[1] < GRID_H
+            and self.grid[n[1]][n[0]] != OBSTACLE
+        ]
+
+    def a_star(self, start, goal):
+        open_set = []
+        heapq.heappush(open_set, (0, start))
+
+        came_from = {}
+        g_score = {start: 0}
+        f_score = {start: self.heuristic(start, goal)}
+
+        while open_set:
+            _, current = heapq.heappop(open_set)
+
+            if current == goal:
+                path = [current]
+
+                while current in came_from:
+                    current = came_from[current]
+                    path.append(current)
+
+                path.reverse()
+                return path
+
+            for neighbor in self.get_neighbors(current):
+                tentative_g = g_score[current] + 1
+
+                if tentative_g < g_score.get(neighbor, float("inf")):
+                    came_from[neighbor] = current
+                    g_score[neighbor] = tentative_g
+
+                    f = tentative_g + self.heuristic(neighbor, goal)
+                    f_score[neighbor] = f
+
+                    heapq.heappush(open_set, (f, neighbor))
+
+        return []
+
+    def calculate_path(self):
+        self.path = self.a_star(
+            (self.robot_x, self.robot_y),
+            self.goal
+        )
+
+        if self.path:
+            self.path_index = 0
+            self.log(f"A* path calculated: {len(self.path)} nodes")
+            self.status_label.config(text="PATH READY", fg="#65e5e5")
+        else:
+            self.log("No path found")
+            self.status_label.config(text="NO PATH", fg="#ff6666")
+
+        self.update_display()
+
+    # ========================================================
+    # ROBOT MOVEMENT
+    # ========================================================
+
+    def start_robot(self):
+        if self.running:
+            return
+
+        if not self.path:
+            self.calculate_path()
+
+        if not self.path:
+            return
+
+        self.running = True
+        self.auto_mode = True
+        self.status_label.config(text="AUTONOMOUS", fg="#65e572")
+        self.log("Autonomous navigation started")
+
+        self.auto_step()
+
+    def stop_robot(self):
+        self.running = False
+        self.status_label.config(text="STOPPED", fg="#ffcc66")
+        self.log("Robot stopped")
+
+    def auto_step(self):
+        if not self.running:
+            return
+
+        if self.battery <= 0:
+            self.running = False
+            self.status_label.config(text="BATTERY EMPTY", fg="#ff6666")
+            self.log("Battery depleted")
+            return
+
+        if self.robot_x == self.goal[0] and self.robot_y == self.goal[1]:
+            self.running = False
+            self.status_label.config(text="MISSION COMPLETE", fg="#65e572")
+            self.log("Target reached successfully")
+            return
+
+        # Recalculate path if needed
+        self.path = self.a_star(
+            (self.robot_x, self.robot_y),
+            self.goal
+        )
+
+        if not self.path:
+            self.running = False
+            self.status_label.config(text="PATH BLOCKED", fg="#ff6666")
+            self.log("Navigation stopped: no valid path")
+            return
+
+        if len(self.path) >= 2:
+            next_pos = self.path[1]
+            nx, ny = next_pos
+
+            dx = nx - self.robot_x
+            dy = ny - self.robot_y
+
+            self.update_direction(dx, dy)
+
+            if self.grid[ny][nx] == OBSTACLE:
+                self.collisions += 1
+                self.log("Obstacle detected")
+                self.calculate_path()
+            else:
+                self.robot_x = nx
+                self.robot_y = ny
+                self.distance += 1.0
+                self.battery = max(0, self.battery - 0.08)
+
+        self.update_display()
+
+        self.root.after(self.speed, self.auto_step)
+
+    def update_direction(self, dx, dy):
+        if dx > 0:
+            self.robot_dir = "EAST"
+        elif dx < 0:
+            self.robot_dir = "WEST"
+        elif dy > 0:
+            self.robot_dir = "SOUTH"
+        elif dy < 0:
+            self.robot_dir = "NORTH"
+
+    def manual_move(self, dx, dy):
+        if self.running:
+            return
+
+        nx = self.robot_x + dx
+        ny = self.robot_y + dy
+
+        if self.is_free(nx, ny):
+            self.robot_x = nx
+            self.robot_y = ny
+            self.distance += 1
+            self.battery = max(0, self.battery - 0.1)
+            self.update_direction(dx, dy)
+            self.log(f"Manual move -> ({nx}, {ny})")
+        else:
+            self.collisions += 1
+            self.log("Manual movement blocked by obstacle")
+
+        self.update_display()
+
+    def is_free(self, x, y):
+        if x < 0 or y < 0 or x >= GRID_W or y >= GRID_H:
+            return False
+
+        return self.grid[y][x] != OBSTACLE
+
+    # ========================================================
+    # RESET / MAP
+    # ========================================================
+
+    def reset_robot(self):
+        self.running = False
+
+        self.robot_x, self.robot_y = self.start
+        self.robot_dir = "EAST"
+
+        self.battery = 100.0
+        self.distance = 0.0
+        self.collisions = 0
+        self.path = []
+
+        self.status_label.config(text="READY", fg="#65e572")
+
+        self.log("Robot reset")
+        self.update_display()
+
+    def random_map(self):
+        self.running = False
+
+        self.grid = [[EMPTY for _ in range(GRID_W)] for _ in range(GRID_H)]
+
+        for y in range(GRID_H):
+            for x in range(GRID_W):
+                if (
+                    x == 0
+                    or y == 0
+                    or x == GRID_W - 1
+                    or y == GRID_H - 1
+                ):
+                    self.grid[y][x] = OBSTACLE
+                elif random.random() < 0.16:
+                    self.grid[y][x] = OBSTACLE
+
+        self.grid[self.start[1]][self.start[0]] = START
+        self.grid[self.goal[1]][self.goal[0]] = GOAL
+
+        self.robot_x, self.robot_y = self.start
+        self.path = []
+
+        self.status_label.config(text="NEW MAP", fg="#65e5e5")
+        self.log("New random map generated")
+
+        self.update_display()
+
+    # ========================================================
+    # SAVE / LOAD
+    # ========================================================
+
+    def save_map(self):
+        filename = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json")]
+        )
+
+        if not filename:
+            return
+
+        data = {
+            "version": VERSION,
+            "width": GRID_W,
+            "height": GRID_H,
+            "grid": self.grid,
+            "start": list(self.start),
+            "goal": list(self.goal)
+        }
+
+        try:
+            with open(filename, "w", encoding="utf-8") as file:
+                json.dump(data, file, indent=2)
+
+            self.log("Map saved successfully")
+            messagebox.showinfo("RoboPilot", "Map saved successfully.")
+
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
+    def load_map(self):
+        filename = filedialog.askopenfilename(
+            filetypes=[("JSON files", "*.json")]
+        )
+
+        if not filename:
+            return
+
+        try:
+            with open(filename, "r", encoding="utf-8") as file:
+                data = json.load(file)
+
+            grid = data.get("grid")
+
+            if not isinstance(grid, list):
+                raise ValueError("Invalid map file")
+
+            if len(grid) != GRID_H:
+                raise ValueError("Map height mismatch")
+
+            self.grid = grid
+
+            self.start = tuple(data.get("start", [2, 2]))
+            self.goal = tuple(data.get("goal", [20, 15]))
+
+            self.robot_x, self.robot_y = self.start
+            self.path = []
+            self.running = False
+
+            self.log("Map loaded successfully")
+            self.update_display()
+
+        except Exception as e:
+            messagebox.showerror("Load Error", str(e))
+
+    # ========================================================
+    # SPEED
+    # ========================================================
+
+    def change_speed(self, value):
+        try:
+            self.speed = int(float(value))
+        except ValueError:
+            self.speed = 120
+
+    # ========================================================
+    # DASHBOARD
+    # ========================================================
+
+    def update_dashboard(self):
+        self.update_sensors()
+
+        elapsed = int(time.time() - self.start_time)
+
+        minutes = elapsed // 60
+        seconds = elapsed % 60
+
+        if self.robot_x == self.goal[0] and self.robot_y == self.goal[1]:
+            mode = "MISSION COMPLETE"
+        elif self.running:
+            mode = "AUTONOMOUS"
+        else:
+            mode = "MANUAL / IDLE"
+
+        info = (
+            f"Position       : ({self.robot_x}, {self.robot_y})\n"
+            f"Direction      : {self.robot_dir}\n"
+            f"Mode           : {mode}\n"
+            f"Speed          : {self.speed} ms\n"
+            f"Battery        : {self.battery:.1f}%\n"
+            f"Distance       : {self.distance:.1f} m\n"
+            f"Collisions     : {self.collisions}\n"
+            f"Runtime        : {minutes:02d}:{seconds:02d}\n"
+            f"\n"
+            f"Virtual Sensors\n"
+            f"Front          : {self.sensor_front} cm\n"
+            f"Left           : {self.sensor_left} cm\n"
+            f"Right          : {self.sensor_right} cm\n"
+            f"\n"
+            f"Navigation\n"
+            f"Algorithm      : A*\n"
+            f"Path Nodes     : {len(self.path)}\n"
+            f"Target         : {self.goal}"
+        )
+
+        self.info_label.config(text=info)
+
+
+# ============================================================
+# START APPLICATION
+# ============================================================
+
+def main():
+    root = tk.Tk()
+    app = RoboPilot(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
